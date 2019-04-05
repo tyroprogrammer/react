@@ -57,13 +57,19 @@ let currentHookNameInDev: ?string;
 function resolveCurrentlyRenderingComponent(): Object {
   invariant(
     currentlyRenderingComponent !== null,
-    'Hooks can only be called inside the body of a function component.',
+    'Invalid hook call. Hooks can only be called inside of the body of a function component. This could happen for' +
+      ' one of the following reasons:\n' +
+      '1. You might have mismatching versions of React and the renderer (such as React DOM)\n' +
+      '2. You might be breaking the Rules of Hooks\n' +
+      '3. You might have more than one copy of React in the same app\n' +
+      'See https://fb.me/react-invalid-hook-call for tips about how to debug and fix this problem.',
   );
   if (__DEV__) {
     warning(
       !isInHookUserCodeInDev,
-      'Hooks can only be called inside the body of a function component. ' +
-        'Do not call Hooks inside other Hooks. For more information, see ' +
+      'Do not call Hooks inside useEffect(...), useMemo(...), or other built-in Hooks. ' +
+        'You can only call Hooks at the top level of your React function. ' +
+        'For more information, see ' +
         'https://fb.me/rules-of-hooks',
     );
   }
@@ -375,8 +381,8 @@ function useRef<T>(initialValue: T): {current: T} {
 }
 
 export function useLayoutEffect(
-  create: () => mixed,
-  deps: Array<mixed> | void | null,
+  create: () => (() => void) | void,
+  inputs: Array<mixed> | void | null,
 ) {
   if (__DEV__) {
     currentHookNameInDev = 'useLayoutEffect';
@@ -387,7 +393,8 @@ export function useLayoutEffect(
       "be encoded into the server renderer's output format. This will lead " +
       'to a mismatch between the initial, non-hydrated UI and the intended ' +
       'UI. To avoid this, useLayoutEffect should only be used in ' +
-      'components that render exclusively on the client.',
+      'components that render exclusively on the client. ' +
+      'See https://fb.me/react-uselayouteffect-ssr for common fixes.',
   );
 }
 

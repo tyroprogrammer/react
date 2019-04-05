@@ -25,7 +25,10 @@ import {
   HostPortal,
   ContextProvider,
   SuspenseComponent,
+  DehydratedSuspenseComponent,
   IncompleteClassComponent,
+  EventComponent,
+  EventTarget,
 } from 'shared/ReactWorkTags';
 import {
   DidCapture,
@@ -34,7 +37,11 @@ import {
   ShouldCapture,
   LifecycleEffectMask,
 } from 'shared/ReactSideEffectTags';
-import {enableSchedulerTracing} from 'shared/ReactFeatureFlags';
+import {
+  enableSchedulerTracing,
+  enableSuspenseServerRenderer,
+  enableEventAPI,
+} from 'shared/ReactFeatureFlags';
 import {ConcurrentMode} from './ReactTypeOfMode';
 import {shouldCaptureSuspense} from './ReactFiberSuspenseComponent';
 
@@ -62,17 +69,15 @@ import {
   markLegacyErrorBoundaryAsFailed,
   isAlreadyFailedLegacyErrorBoundary,
   pingSuspendedRoot,
+  resolveRetryThenable,
+  inferStartTimeFromExpirationTime,
 } from './ReactFiberScheduler';
 
 import invariant from 'shared/invariant';
 import maxSigned31BitInt from './maxSigned31BitInt';
-import {
-  Sync,
-  expirationTimeToMs,
-  LOW_PRIORITY_EXPIRATION,
-} from './ReactFiberExpirationTime';
-import {findEarliestOutstandingPriorityLevel} from './ReactFiberPendingPriority';
+import {Sync, expirationTimeToMs} from './ReactFiberExpirationTime';
 
+const PossiblyWeakSet = typeof WeakSet === 'function' ? WeakSet : Set;
 const PossiblyWeakMap = typeof WeakMap === 'function' ? WeakMap : Map;
 
 function createRootErrorUpdate(
@@ -144,6 +149,43 @@ function createClassErrorUpdate(
   return update;
 }
 
+function attachPingListener(
+  root: FiberRoot,
+  renderExpirationTime: ExpirationTime,
+  thenable: Thenable,
+) {
+  // Attach a listener to the promise to "ping" the root and retry. But
+  // only if one does not already exist for the current render expiration
+  // time (which acts like a "thread ID" here).
+  let pingCache = root.pingCache;
+  let threadIDs;
+  if (pingCache === null) {
+    pingCache = root.pingCache = new PossiblyWeakMap();
+    threadIDs = new Set();
+    pingCache.set(thenable, threadIDs);
+  } else {
+    threadIDs = pingCache.get(thenable);
+    if (threadIDs === undefined) {
+      threadIDs = new Set();
+      pingCache.set(thenable, threadIDs);
+    }
+  }
+  if (!threadIDs.has(renderExpirationTime)) {
+    // Memoize using the thread ID to prevent redundant listeners.
+    threadIDs.add(renderExpirationTime);
+    let ping = pingSuspendedRoot.bind(
+      null,
+      root,
+      thenable,
+      renderExpirationTime,
+    );
+    if (enableSchedulerTracing) {
+      ping = Schedule_tracing_wrap(ping);
+    }
+    thenable.then(ping, ping);
+  }
+}
+
 function throwException(
   root: FiberRoot,
   returnFiber: Fiber,
@@ -186,18 +228,17 @@ function throwException(
             break;
           }
         }
-        let timeoutPropMs = workInProgress.pendingProps.maxDuration;
-        if (typeof timeoutPropMs === 'number') {
-          if (timeoutPropMs <= 0) {
-            earliestTimeoutMs = 0;
-          } else if (
-            earliestTimeoutMs === -1 ||
-            timeoutPropMs < earliestTimeoutMs
-          ) {
-            earliestTimeoutMs = timeoutPropMs;
-          }
+        const defaultSuspenseTimeout = 150;
+        if (
+          earliestTimeoutMs === -1 ||
+          defaultSuspenseTimeout < earliestTimeoutMs
+        ) {
+          earliestTimeoutMs = defaultSuspenseTimeout;
         }
       }
+      // If there is a DehydratedSuspenseComponent we don't have to do anything because
+      // if something suspends inside it, we will simply leave that as dehydrated. It
+      // will never timeout.
       workInProgress = workInProgress.return;
     } while (workInProgress !== null);
 
@@ -265,36 +306,7 @@ function throwException(
         // Confirmed that the boundary is in a concurrent mode tree. Continue
         // with the normal suspend path.
 
-        // Attach a listener to the promise to "ping" the root and retry. But
-        // only if one does not already exist for the current render expiration
-        // time (which acts like a "thread ID" here).
-        let pingCache = root.pingCache;
-        let threadIDs;
-        if (pingCache === null) {
-          pingCache = root.pingCache = new PossiblyWeakMap();
-          threadIDs = new Set();
-          pingCache.set(thenable, threadIDs);
-        } else {
-          threadIDs = pingCache.get(thenable);
-          if (threadIDs === undefined) {
-            threadIDs = new Set();
-            pingCache.set(thenable, threadIDs);
-          }
-        }
-        if (!threadIDs.has(renderExpirationTime)) {
-          // Memoize using the thread ID to prevent redundant listeners.
-          threadIDs.add(renderExpirationTime);
-          let ping = pingSuspendedRoot.bind(
-            null,
-            root,
-            thenable,
-            renderExpirationTime,
-          );
-          if (enableSchedulerTracing) {
-            ping = Schedule_tracing_wrap(ping);
-          }
-          thenable.then(ping, ping);
-        }
+        attachPingListener(root, renderExpirationTime, thenable);
 
         let absoluteTimeoutMs;
         if (earliestTimeoutMs === -1) {
@@ -306,21 +318,12 @@ function throwException(
           if (startTimeMs === -1) {
             // This suspend happened outside of any already timed-out
             // placeholders. We don't know exactly when the update was
-            // scheduled, but we can infer an approximate start time from the
-            // expiration time. First, find the earliest uncommitted expiration
-            // time in the tree, including work that is suspended. Then subtract
-            // the offset used to compute an async update's expiration time.
-            // This will cause high priority (interactive) work to expire
-            // earlier than necessary, but we can account for this by adjusting
-            // for the Just Noticeable Difference.
-            const earliestExpirationTime = findEarliestOutstandingPriorityLevel(
+            // scheduled, but we can infer an approximate start time based on
+            // the expiration time and the priority.
+            startTimeMs = inferStartTimeFromExpirationTime(
               root,
               renderExpirationTime,
             );
-            const earliestExpirationTimeMs = expirationTimeToMs(
-              earliestExpirationTime,
-            );
-            startTimeMs = earliestExpirationTimeMs - LOW_PRIORITY_EXPIRATION;
           }
           absoluteTimeoutMs = startTimeMs + earliestTimeoutMs;
         }
@@ -331,6 +334,36 @@ function throwException(
         // whole tree.
         renderDidSuspend(root, absoluteTimeoutMs, renderExpirationTime);
 
+        workInProgress.effectTag |= ShouldCapture;
+        workInProgress.expirationTime = renderExpirationTime;
+        return;
+      } else if (
+        enableSuspenseServerRenderer &&
+        workInProgress.tag === DehydratedSuspenseComponent
+      ) {
+        attachPingListener(root, renderExpirationTime, thenable);
+
+        // Since we already have a current fiber, we can eagerly add a retry listener.
+        let retryCache = workInProgress.memoizedState;
+        if (retryCache === null) {
+          retryCache = workInProgress.memoizedState = new PossiblyWeakSet();
+          const current = workInProgress.alternate;
+          invariant(
+            current,
+            'A dehydrated suspense boundary must commit before trying to render. ' +
+              'This is probably a bug in React.',
+          );
+          current.memoizedState = retryCache;
+        }
+        // Memoize using the boundary fiber to prevent redundant listeners.
+        if (!retryCache.has(thenable)) {
+          retryCache.add(thenable);
+          let retry = resolveRetryThenable.bind(null, workInProgress, thenable);
+          if (enableSchedulerTracing) {
+            retry = Schedule_tracing_wrap(retry);
+          }
+          thenable.then(retry, retry);
+        }
         workInProgress.effectTag |= ShouldCapture;
         workInProgress.expirationTime = renderExpirationTime;
         return;
@@ -432,6 +465,7 @@ function unwindWork(
       return workInProgress;
     }
     case HostComponent: {
+      // TODO: popHydrationState
       popHostContext(workInProgress);
       return null;
     }
@@ -444,11 +478,29 @@ function unwindWork(
       }
       return null;
     }
+    case DehydratedSuspenseComponent: {
+      if (enableSuspenseServerRenderer) {
+        // TODO: popHydrationState
+        const effectTag = workInProgress.effectTag;
+        if (effectTag & ShouldCapture) {
+          workInProgress.effectTag = (effectTag & ~ShouldCapture) | DidCapture;
+          // Captured a suspense effect. Re-render the boundary.
+          return workInProgress;
+        }
+      }
+      return null;
+    }
     case HostPortal:
       popHostContainer(workInProgress);
       return null;
     case ContextProvider:
       popProvider(workInProgress);
+      return null;
+    case EventComponent:
+    case EventTarget:
+      if (enableEventAPI) {
+        popHostContext(workInProgress);
+      }
       return null;
     default:
       return null;

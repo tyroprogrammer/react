@@ -35,6 +35,7 @@ import {
   getPublicRootInstance,
   findHostInstance,
   findHostInstanceWithWarning,
+  flushPassiveEffects,
 } from 'react-reconciler/inline.dom';
 import {createPortal as createPortalImpl} from 'shared/ReactPortal';
 import {canUseDOM} from 'shared/ExecutionEnvironment';
@@ -44,10 +45,8 @@ import {
   enqueueStateRestore,
   restoreStateIfNeeded,
 } from 'events/ReactControlledComponent';
-import {
-  injection as EventPluginHubInjection,
-  runEventsInBatch,
-} from 'events/EventPluginHub';
+import {injection as EventPluginHubInjection} from 'events/EventPluginHub';
+import {runEventsInBatch} from 'events/EventBatching';
 import {eventNameDispatchConfigs} from 'events/EventPluginRegistry';
 import {
   accumulateTwoPhaseDispatches,
@@ -656,7 +655,7 @@ const ReactDOM: Object = {
         !container._reactHasBeenPassedToCreateRootDEV,
         'You are calling ReactDOM.hydrate() on a container that was previously ' +
           'passed to ReactDOM.%s(). This is not supported. ' +
-          'Did you mean to call root.render(element, {hydrate: true})?',
+          'Did you mean to call createRoot(container, {hydrate: true}).render(element)?',
         enableStableConcurrentModeAPIs ? 'createRoot' : 'unstable_createRoot',
       );
     }
@@ -809,7 +808,7 @@ const ReactDOM: Object = {
 
   __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: {
     // Keep in sync with ReactDOMUnstableNativeDependencies.js
-    // and ReactTestUtils.js. This is an array for better minification.
+    // ReactTestUtils.js, and ReactTestUtilsAct.js. This is an array for better minification.
     Events: [
       getInstanceFromNode,
       getNodeFromInstance,
@@ -822,6 +821,7 @@ const ReactDOM: Object = {
       restoreStateIfNeeded,
       dispatchEvent,
       runEventsInBatch,
+      flushPassiveEffects,
     ],
   },
 };

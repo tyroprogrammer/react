@@ -8,6 +8,7 @@
  */
 
 import type {ReactNativeBaseComponentViewConfig} from './ReactNativeTypes';
+import type {ReactEventResponder} from 'shared/ReactTypes';
 
 import invariant from 'shared/invariant';
 
@@ -23,12 +24,6 @@ import {
   updateFiberProps,
 } from './ReactNativeComponentTree';
 import ReactNativeFiberHostComponent from './ReactNativeFiberHostComponent';
-import {
-  now as ReactNativeFrameSchedulingNow,
-  cancelDeferredCallback as ReactNativeFrameSchedulingCancelDeferredCallback,
-  scheduleDeferredCallback as ReactNativeFrameSchedulingScheduleDeferredCallback,
-  shouldYield as ReactNativeFrameSchedulingShouldYield,
-} from './ReactNativeFrameScheduling';
 
 export type Type = string;
 export type Props = Object;
@@ -211,6 +206,21 @@ export function getChildHostContext(
   }
 }
 
+export function getChildHostContextForEventComponent(
+  parentHostContext: HostContext,
+) {
+  // TODO: add getChildHostContextForEventComponent implementation
+  return parentHostContext;
+}
+
+export function getChildHostContextForEventTarget(
+  parentHostContext: HostContext,
+  type: Symbol | number,
+) {
+  // TODO: add getChildHostContextForEventTarget implementation
+  return parentHostContext;
+}
+
 export function getPublicInstance(instance: Instance): * {
   return instance;
 }
@@ -234,11 +244,7 @@ export function resetAfterCommit(containerInfo: Container): void {
   // Noop
 }
 
-export const now = ReactNativeFrameSchedulingNow;
 export const isPrimaryRenderer = true;
-export const scheduleDeferredCallback = ReactNativeFrameSchedulingScheduleDeferredCallback;
-export const cancelDeferredCallback = ReactNativeFrameSchedulingCancelDeferredCallback;
-export const shouldYield = ReactNativeFrameSchedulingShouldYield;
 
 export const scheduleTimeout = setTimeout;
 export const cancelTimeout = clearTimeout;
@@ -485,4 +491,21 @@ export function unhideTextInstance(
   text: string,
 ): void {
   throw new Error('Not yet implemented.');
+}
+
+export function handleEventComponent(
+  eventResponder: ReactEventResponder,
+  rootContainerInstance: Container,
+  internalInstanceHandle: Object,
+) {
+  // TODO: add handleEventComponent implementation
+}
+
+export function handleEventTarget(
+  type: Symbol | number,
+  props: Props,
+  parentInstance: Container,
+  internalInstanceHandle: Object,
+) {
+  // TODO: add handleEventTarget implementation
 }
